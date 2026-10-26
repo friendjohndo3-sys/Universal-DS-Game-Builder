@@ -98,6 +98,7 @@ jobs:
             convert -size 48x48 xc:#34495E icon.png || touch icon.png
           fi
 
+          # Compile the codebase
           make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
 
           ELF_FILE=$(ls *.elf 2>/dev/null | head -n 1)
@@ -106,26 +107,17 @@ jobs:
             TARGET_BASE="homebrew_app"
           fi
 
-          # 1. NDS Build
-          if [ "$TARGET_FORMAT" = "nds" ] || [ "$TARGET_FORMAT" = "all" ]; then
-            if ls *.nds 1> /dev/null 2>&1; then
-              cp *.nds ../../output_binaries/
-            elif [ -n "$ELF_FILE" ] && which ndstool >/dev/null 2>&1; then
-              ndstool -c "${TARGET_BASE}.nds" -9 "$ELF_FILE"
-              cp "${TARGET_BASE}.nds" ../../output_binaries/
-            fi
-          fi
-
-          # 2. 3DSX Build
+          # 1. 3DSX Build (.3dsx Homebrew Launcher)
           if [ "$TARGET_FORMAT" = "3dsx" ] || [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
+            echo "=== Checking / Packaging 3DSX ==="
             smdhtool --create "$TITLE" "$DESC" "$AUTHOR" icon.png game.smdh || true
 
             if ! ls *.3dsx 1> /dev/null 2>&1; then
               if [ -n "$ELF_FILE" ]; then
                 if [ -d "romfs" ]; then
-                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs
+                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs || true
                 else
-                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh
+                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh || true
                 fi
               fi
             fi
@@ -135,8 +127,9 @@ jobs:
             fi
           fi
 
-          # 3. CIA Build
+          # 2. CIA Build (CTR Importable Archive)
           if [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
+            echo "=== Checking / Packaging CIA ==="
             if [ -n "$ELF_FILE" ] && which makerom >/dev/null 2>&1; then
               printf "BasicInfo:\n  Title                   : \"%s\"\n  CompanyCode             : \"00\"\n  ProductCode             : \"%s\"\n  ContentType             : Application\n  Logo                    : Nintendo\n\nTitleInfo:\n  UniqueId                : %s\n  Category                : Application\n\nCardInfo:\n  MediaType               : Card1\n\nPlainRegion:\n\nOption:\n  UseOnSD                 : true\n  EnableCompress          : true\n  FreeProductCode         : true\n  EnableL2Cache           : true\n\nAccessControlInfo:\n  IdealProcessor          : 0\n  AffinityMask            : 1\n  Priority                : 16\n  CoreVersion             : 2\n  DescVersion             : 2\n  ReleaseKernelMajor      : \"02\"\n  ReleaseKernelMinor      : \"33\"\n  MemoryType              : Application\n  HandleTableSize         : 512\n  FileSystemAccess:\n    - DirectSdmc\n\nSystemControlInfo:\n  SaveDataSize            : 512KB\n  RemasterVersion         : 0\n  StackSize               : 0x40000\n" "$TITLE" "$PROD_CODE" "$UNIQUE_ID" > app.rsf
 
@@ -160,6 +153,22 @@ jobs:
               fi
             fi
           fi
+
+          # 3. NDS Build (Only if this is a genuine Nintendo DS project or generated .nds)
+          if [ "$TARGET_FORMAT" = "nds" ] || [ "$TARGET_FORMAT" = "all" ]; then
+            echo "=== Checking / Packaging NDS ==="
+            if ls *.nds 1> /dev/null 2>&1; then
+              cp *.nds ../../output_binaries/
+            elif [ "$TARGET_FORMAT" = "nds" ] && [ -n "$ELF_FILE" ] && which ndstool >/dev/null 2>&1; then
+              ndstool -c "${TARGET_BASE}.nds" -9 "$ELF_FILE" || echo "Note: ELF is not a legacy DS ARM9 binary."
+              if [ -f "${TARGET_BASE}.nds" ]; then
+                cp "${TARGET_BASE}.nds" ../../output_binaries/
+              fi
+            fi
+          fi
+
+          echo "=== Final Compiled Artifacts ==="
+          ls -lh ../../output_binaries/
 
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4

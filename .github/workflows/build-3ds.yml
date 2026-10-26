@@ -138,47 +138,7 @@ jobs:
           # 3. CIA Build
           if [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
             if [ -n "$ELF_FILE" ] && which makerom >/dev/null 2>&1; then
-              cat << EOF > app.rsf
-BasicInfo:
-  Title                   : "$TITLE"
-  CompanyCode             : "00"
-  ProductCode             : "$PROD_CODE"
-  ContentType             : Application
-  Logo                    : Nintendo
-
-TitleInfo:
-  UniqueId                : $UNIQUE_ID
-  Category                : Application
-
-CardInfo:
-  MediaType               : Card1
-
-PlainRegion:
-
-Option:
-  UseOnSD                 : true
-  EnableCompress          : true
-  FreeProductCode         : true
-  EnableL2Cache           : true
-
-AccessControlInfo:
-  IdealProcessor          : 0
-  AffinityMask            : 1
-  Priority                : 16
-  CoreVersion             : 2
-  DescVersion             : 2
-  ReleaseKernelMajor      : "02"
-  ReleaseKernelMinor      : "33"
-  MemoryType              : Application
-  HandleTableSize         : 512
-  FileSystemAccess:
-    - DirectSdmc
-
-SystemControlInfo:
-  SaveDataSize            : 512KB
-  RemasterVersion         : 0
-  StackSize               : 0x40000
-EOF
+              printf "BasicInfo:\n  Title                   : \"%s\"\n  CompanyCode             : \"00\"\n  ProductCode             : \"%s\"\n  ContentType             : Application\n  Logo                    : Nintendo\n\nTitleInfo:\n  UniqueId                : %s\n  Category                : Application\n\nCardInfo:\n  MediaType               : Card1\n\nPlainRegion:\n\nOption:\n  UseOnSD                 : true\n  EnableCompress          : true\n  FreeProductCode         : true\n  EnableL2Cache           : true\n\nAccessControlInfo:\n  IdealProcessor          : 0\n  AffinityMask            : 1\n  Priority                : 16\n  CoreVersion             : 2\n  DescVersion             : 2\n  ReleaseKernelMajor      : \"02\"\n  ReleaseKernelMinor      : \"33\"\n  MemoryType              : Application\n  HandleTableSize         : 512\n  FileSystemAccess:\n    - DirectSdmc\n\nSystemControlInfo:\n  SaveDataSize            : 512KB\n  RemasterVersion         : 0\n  StackSize               : 0x40000\n" "$TITLE" "$PROD_CODE" "$UNIQUE_ID" > app.rsf
 
               BANNER_ARG=""
               if which bannertool >/dev/null 2>&1; then

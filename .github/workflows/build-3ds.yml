@@ -162,19 +162,16 @@ jobs:
               echo "  RemasterVersion         : 0" >> app.rsf
               echo "  StackSize               : 0x40000" >> app.rsf
 
-              cat << 'EOF' > extract_romfs.py
-          import struct, os, sys
-          try:
-              with open(sys.argv[1], 'rb') as f:
-                  data = f.read()
-              if data[:4] == b'3DSX' and len(data) >= 0x30:
-                  rofs_off, rofs_sz = struct.unpack_from('<II', data, 40)
-                  if rofs_off > 0 and rofs_sz > 0:
-                      with open('romfs.bin', 'wb') as out:
-                          out.write(data[rofs_off:rofs_off + rofs_sz])
-          except Exception as e:
-              pass
-          EOF
+              echo "import struct, os, sys" > extract_romfs.py
+              echo "try:" >> extract_romfs.py
+              echo "    with open(sys.argv[1], 'rb') as f: data = f.read()" >> extract_romfs.py
+              echo "    if data[:4] == b'3DSX' and len(data) >= 48:" >> extract_romfs.py
+              echo "        o, s = struct.unpack_from('<II', data, 40)" >> extract_romfs.py
+              echo "        if o > 0 and s > 0:" >> extract_romfs.py
+              echo "            with open('romfs.bin', 'wb') as out: out.write(data[o:o+s])" >> extract_romfs.py
+              echo "except:" >> extract_romfs.py
+              echo "    pass" >> extract_romfs.py
+              
               python3 extract_romfs.py "${TARGET_BASE}.3dsx"
               
               ROMFS_ARG=""

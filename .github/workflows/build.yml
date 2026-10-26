@@ -25,21 +25,15 @@ jobs:
 
       - name: Compile 3DS Executable
         run: |
-          # Navigate into the project folder where Makefile lives
           TARGET_DIR=$(find project -name "Makefile" -exec dirname {} \;)
           cd "$TARGET_DIR"
 
-          # 1. Clean previous builds
+          # Clean and compile ELF binary
           make clean
-
-          # 2. Compile ELF binary
           make meepa_game.elf
 
-          # 3. Generate a valid SMDH icon/metadata descriptor
-          smdhtool --create "Meepa 3DS" "Low-poly chunky 3D adventure" "Prism Ink" meepa_game.smdh
-
-          # 4. Package into 3DSX with romfs and smdh metadata
-          3dsxtool meepa_game.elf meepa_game.3dsx --smdh=meepa_game.smdh --romfs=romfs
+          # Package 3DSX directly with romfs
+          3dsxtool meepa_game.elf meepa_game.3dsx --romfs=romfs
 
           echo "Successfully created meepa_game.3dsx!"
           ls -la meepa_game.3dsx

@@ -76,6 +76,13 @@ jobs:
             find /tmp/bannertool_bin -type f -name "bannertool" -exec cp {} /usr/local/bin/bannertool \; 2>/dev/null || true
             chmod +x /usr/local/bin/bannertool 2>/dev/null || true
           fi
+          
+          curl -sSL "https://github.com/dnasdw/3dstool/releases/download/v1.2.6/3dstool_linux_x86_64.tar.gz" -o /tmp/3dstool.tar.gz || true
+          if [ -f /tmp/3dstool.tar.gz ]; then
+            tar -xzf /tmp/3dstool.tar.gz -C /tmp 2>/dev/null || true
+            find /tmp/3dstool_linux_x86_64 -type f -name "3dstool" -exec cp {} /usr/local/bin/3dstool \; 2>/dev/null || true
+            chmod +x /usr/local/bin/3dstool 2>/dev/null || true
+          fi
 
           ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
@@ -162,21 +169,12 @@ jobs:
               echo "  RemasterVersion         : 0" >> app.rsf
               echo "  StackSize               : 0x40000" >> app.rsf
 
-              echo "import struct, os, sys" > extract_romfs.py
-              echo "try:" >> extract_romfs.py
-              echo "    with open(sys.argv[1], 'rb') as f: data = f.read()" >> extract_romfs.py
-              echo "    if data[:4] == b'3DSX' and len(data) >= 48:" >> extract_romfs.py
-              echo "        o, s = struct.unpack_from('<II', data, 40)" >> extract_romfs.py
-              echo "        if o > 0 and s > 0:" >> extract_romfs.py
-              echo "            with open('romfs.bin', 'wb') as out: out.write(data[o:o+s])" >> extract_romfs.py
-              echo "except:" >> extract_romfs.py
-              echo "    pass" >> extract_romfs.py
-              
-              python3 extract_romfs.py "${TARGET_BASE}.3dsx"
-              
               ROMFS_ARG=""
-              if [ -f "romfs.bin" ]; then
-                ROMFS_ARG="-romfs romfs.bin"
+              if [ -d "romfs" ] && which 3dstool >/dev/null 2>&1; then
+                3dstool -cvtf romfs romfs.bin --romfs-dir romfs/
+                if [ -f "romfs.bin" ]; then
+                  ROMFS_ARG="-romfs romfs.bin"
+                fi
               fi
               
               BANNER_ARG=""

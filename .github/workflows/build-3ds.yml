@@ -65,23 +65,31 @@ jobs:
           apt-get update && apt-get install -y unzip imagemagick zip curl wget || true
           mkdir -p "$GITHUB_WORKSPACE/workspace" "$GITHUB_WORKSPACE/output_binaries"
 
-          echo "=== Installing makerom and bannertool for CIA generation ==="
-          wget -q https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.3/makerom-v0.18.3-ubuntu_x86_64.zip -O /tmp/makerom.zip || true
+          echo "=== Installing makerom for CIA generation ==="
+          curl -sSL "https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.3/makerom-v0.18.3-ubuntu_x86_64.zip" -o /tmp/makerom.zip || true
           if [ -f /tmp/makerom.zip ]; then
-            unzip -o /tmp/makerom.zip -d /tmp/makerom_bin
-            cp /tmp/makerom_bin/makerom /usr/local/bin/makerom || cp /tmp/makerom_bin/ubuntu_x86_64/makerom /usr/local/bin/makerom || true
-            chmod +x /usr/local/bin/makerom || true
+            unzip -o /tmp/makerom.zip -d /tmp/makerom_bin 2>/dev/null || true
+            if [ -f /tmp/makerom_bin/makerom ]; then
+              cp /tmp/makerom_bin/makerom /usr/local/bin/makerom
+              chmod +x /usr/local/bin/makerom
+            elif [ -f /tmp/makerom_bin/ubuntu_x86_64/makerom ]; then
+              cp /tmp/makerom_bin/ubuntu_x86_64/makerom /usr/local/bin/makerom
+              chmod +x /usr/local/bin/makerom
+            fi
           fi
 
-          wget -q https://github.com/Steveice10/bannertool/releases/download/1.2.0/bannertool.zip -O /tmp/bannertool.zip || true
-          if [ -f /tmp/bannertool.zip ]; then
-            unzip -o /tmp/bannertool.zip -d /tmp/bannertool_bin
-            cp /tmp/bannertool_bin/linux-x86_64/bannertool /usr/local/bin/bannertool || cp /tmp/bannertool_bin/bannertool /usr/local/bin/bannertool || true
-            chmod +x /usr/local/bin/bannertool || true
+          echo "=== Installing bannertool (optional) ==="
+          curl -sSL "https://github.com/Steveice10/bannertool/releases/download/1.2.0/bannertool.zip" -o /tmp/bannertool.zip || true
+          if unzip -t /tmp/bannertool.zip >/dev/null 2>&1; then
+            unzip -o /tmp/bannertool.zip -d /tmp/bannertool_bin 2>/dev/null || true
+            find /tmp/bannertool_bin -name "bannertool" -type f -exec cp {} /usr/local/bin/bannertool \; 2>/dev/null || true
+            chmod +x /usr/local/bin/bannertool 2>/dev/null || true
+          else
+            echo "Notice: bannertool archive not required; makerom will generate native default banner."
           fi
 
-          which makerom && echo "makerom installed successfully!" || echo "Warning: makerom not found"
-          which bannertool && echo "bannertool installed successfully!" || echo "Warning: bannertool not found"
+          which makerom && echo "makerom is ready!" || echo "Warning: makerom could not be installed"
+          which bannertool && echo "bannertool is ready!" || echo "bannertool skipped (fallback to makerom internal banner)"
 
           ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
@@ -119,10 +127,10 @@ jobs:
             convert -size 48x48 xc:#34495E icon.png || touch icon.png
           fi
 
-          # Generate SMDH descriptor
+          # Generate SMDH descriptor for 3DS
           smdhtool --create "$TITLE" "$DESC" "$AUTHOR" icon.png game.smdh || true
 
-          # Compile the codebase
+          # Compile the codebase using ARM11 devkitARM
           make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
 
           ELF_FILE=$(ls *.elf 2>/dev/null | head -n 1)
@@ -150,6 +158,7 @@ jobs:
                 ROMFS_ARG="-romfs romfs"
               fi
 
+              echo "Executing makerom..."
               makerom -f cia -o "${TARGET_BASE}.cia" -elf "$ELF_FILE" -rsf app.rsf -icon game.smdh $BANNER_ARG $ROMFS_ARG
               
               if [ -f "${TARGET_BASE}.cia" ]; then
@@ -157,12 +166,12 @@ jobs:
                 echo "Successfully built ${TARGET_BASE}.cia!"
               fi
             else
-              echo "Error: makerom is missing or ELF not found; could not produce CIA."
+              echo "Error: makerom could not be found or ELF missing; unable to produce CIA."
               exit 1
             fi
           fi
 
-          # 2. Process 3DSX Target
+          # 2. Process 3DSX Target (Only if requested or 'all')
           if [ "$TARGET_FORMAT" = "3dsx" ] || [ "$TARGET_FORMAT" = "all" ]; then
             echo "=== Packaging 3DSX Target ==="
             if ! ls *.3dsx 1> /dev/null 2>&1; then
@@ -180,7 +189,7 @@ jobs:
             fi
           fi
 
-          # 3. Process NDS Target
+          # 3. Process NDS Target (Only if requested or 'all')
           if [ "$TARGET_FORMAT" = "nds" ] || [ "$TARGET_FORMAT" = "all" ]; then
             if ls *.nds 1> /dev/null 2>&1; then
               cp *.nds "$OUT_DIR/"

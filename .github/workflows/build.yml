@@ -15,14 +15,24 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Unzip Project Files
+      - name: Install Unzip & Extract Project
         run: |
-          unzip -o meepa_3ds_game_ready.zip -d project
+          apt-get update && apt-get install -y unzip
+          mkdir -p project
+          # Find any .zip file in the root and extract it
+          ZIP_FILE=$(ls *.zip | head -n 1)
+          echo "Found zip file: $ZIP_FILE"
+          unzip -o "$ZIP_FILE" -d project
           ls -la project
 
       - name: Compile 3DS Executable
-        working-directory: project
         run: |
+          # If the zip extracted into a subfolder, enter it
+          if [ -d "project/meepa_3ds_game_fixed" ]; then
+            cd project/meepa_3ds_game_fixed
+          else
+            cd project
+          fi
           make clean
           make
 
@@ -30,5 +40,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: meepa_game_3dsx
-          path: project/*.3dsx
-          
+          path: "**/*.3dsx"

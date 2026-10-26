@@ -1,12 +1,49 @@
 name: Universal 3DS Game Builder
 
 on:
+  workflow_dispatch:
+    inputs:
+      target_format:
+        description: 'Choose build output format'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - 'all'
+          - '3dsx'
+          - 'cia'
+          - 'nds'
+      app_title:
+        description: 'Application Title'
+        required: false
+        default: 'Homebrew Game'
+        type: string
+      app_author:
+        description: 'Author / Studio'
+        required: false
+        default: 'Prism Ink'
+        type: string
+      app_description:
+        description: 'Short Description'
+        required: false
+        default: 'Custom Nintendo Homebrew'
+        type: string
+      product_code:
+        description: 'Unique Product Code for CIA (format: CTR-P-XXXX)'
+        required: false
+        default: 'CTR-P-MEEP'
+        type: string
+      unique_id:
+        description: 'Unique Hex ID for CIA (e.g. 0xF4100)'
+        required: false
+        default: '0xF4100'
+        type: string
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:
 
 jobs:
   build:
+    name: Build Homebrew Package
     runs-on: ubuntu-latest
     container:
       image: devkitpro/devkitarm:latest
@@ -23,67 +60,149 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Extract Project
+      - name: Setup Tools & Workspace
         run: |
-          which arm-none-eabi-gcc
-          apt-get update && apt-get install -y unzip imagemagick || true
-          mkdir -p workspace
-          
-          # Find any uploaded zip file
+          apt-get update && apt-get install -y unzip imagemagick zip curl || true
+          mkdir -p workspace output_binaries
+
           ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
-            echo "Unpacking $ZIP_FILE..."
+            echo "Extracting archive: $ZIP_FILE"
             unzip -o "$ZIP_FILE" -d workspace
           else
-            echo "No zip file found; copying repository root..."
+            echo "No zip detected; copying repo files..."
             cp -r ./* workspace/ 2>/dev/null || true
           fi
 
-      - name: Universal 3DS Compile & Package
+      - name: Compile and Package Artifacts
         run: |
-          # Locate the directory containing the Makefile
+          set -e
           MAKE_DIR=$(find workspace -name "Makefile" -exec dirname {} \; | head -n 1)
           if [ -z "$MAKE_DIR" ]; then
-            echo "Error: Could not locate a Makefile in the uploaded project!"
+            echo "Error: Could not locate a Makefile in the uploaded workspace!"
             exit 1
           fi
           cd "$MAKE_DIR"
           echo "Building in: $(pwd)"
 
-          # 1. Clean old objects
+          TARGET_FORMAT="${{ github.event.inputs.target_format || 'all' }}"
+          TITLE="${{ github.event.inputs.app_title || 'Homebrew Game' }}"
+          AUTHOR="${{ github.event.inputs.app_author || 'Prism Ink' }}"
+          DESC="${{ github.event.inputs.app_description || 'Custom Nintendo Homebrew' }}"
+          PROD_CODE="${{ github.event.inputs.product_code || 'CTR-P-MEEP' }}"
+          UNIQUE_ID="${{ github.event.inputs.unique_id || '0xF4100' }}"
+
           make clean || true
 
-          # 2. Ensure an icon exists for 3DS Home Menu
           if [ ! -f "icon.png" ]; then
-            echo "Generating default 48x48 icon..."
-            convert -size 48x48 xc:#4A90E2 icon.png || touch icon.png
+            convert -size 48x48 xc:#34495E icon.png || touch icon.png
           fi
 
-          # 3. Create SMDH metadata descriptor
-          smdhtool --create "Homebrew Game" "Custom 3DS Adventure" "Prism Ink" icon.png game.smdh || true
-
-          # 4. Compile with 3DS ARM cross-compiler explicitly
           make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
 
-          # 5. If Makefile didn't generate .3dsx directly, package it from the compiled ELF
-          if ! ls *.3dsx 1> /dev/null 2>&1; then
-            ELF_FILE=$(ls *.elf | head -n 1)
-            if [ -n "$ELF_FILE" ]; then
-              TARGET_NAME="${ELF_FILE%.elf}"
-              echo "Packaging $TARGET_NAME.3dsx..."
+          ELF_FILE=$(ls *.elf 2>/dev/null | head -n 1)
+          TARGET_BASE="${ELF_FILE%.elf}"
+          if [ -z "$TARGET_BASE" ]; then
+            TARGET_BASE="homebrew_app"
+          fi
+
+          # 1. NDS Build
+          if [ "$TARGET_FORMAT" = "nds" ] || [ "$TARGET_FORMAT" = "all" ]; then
+            if ls *.nds 1> /dev/null 2>&1; then
+              cp *.nds ../../output_binaries/
+            elif [ -n "$ELF_FILE" ] && which ndstool >/dev/null 2>&1; then
+              ndstool -c "${TARGET_BASE}.nds" -9 "$ELF_FILE"
+              cp "${TARGET_BASE}.nds" ../../output_binaries/
+            fi
+          fi
+
+          # 2. 3DSX Build
+          if [ "$TARGET_FORMAT" = "3dsx" ] || [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
+            smdhtool --create "$TITLE" "$DESC" "$AUTHOR" icon.png game.smdh || true
+
+            if ! ls *.3dsx 1> /dev/null 2>&1; then
+              if [ -n "$ELF_FILE" ]; then
+                if [ -d "romfs" ]; then
+                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs
+                else
+                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh
+                fi
+              fi
+            fi
+
+            if ls *.3dsx 1> /dev/null 2>&1; then
+              cp *.3dsx ../../output_binaries/
+            fi
+          fi
+
+          # 3. CIA Build
+          if [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
+            if [ -n "$ELF_FILE" ] && which makerom >/dev/null 2>&1; then
+              cat << EOF > app.rsf
+BasicInfo:
+  Title                   : "$TITLE"
+  CompanyCode             : "00"
+  ProductCode             : "$PROD_CODE"
+  ContentType             : Application
+  Logo                    : Nintendo
+
+TitleInfo:
+  UniqueId                : $UNIQUE_ID
+  Category                : Application
+
+CardInfo:
+  MediaType               : Card1
+
+PlainRegion:
+
+Option:
+  UseOnSD                 : true
+  EnableCompress          : true
+  FreeProductCode         : true
+  EnableL2Cache           : true
+
+AccessControlInfo:
+  IdealProcessor          : 0
+  AffinityMask            : 1
+  Priority                : 16
+  CoreVersion             : 2
+  DescVersion             : 2
+  ReleaseKernelMajor      : "02"
+  ReleaseKernelMinor      : "33"
+  MemoryType              : Application
+  HandleTableSize         : 512
+  FileSystemAccess:
+    - DirectSdmc
+
+SystemControlInfo:
+  SaveDataSize            : 512KB
+  RemasterVersion         : 0
+  StackSize               : 0x40000
+EOF
+
+              BANNER_ARG=""
+              if which bannertool >/dev/null 2>&1; then
+                bannertool makebanner -i icon.png -a /dev/null -o banner.bin 2>/dev/null || true
+                if [ -f "banner.bin" ]; then
+                  BANNER_ARG="-banner banner.bin"
+                fi
+              fi
+
+              ROMFS_ARG=""
               if [ -d "romfs" ]; then
-                3dsxtool "$ELF_FILE" "$TARGET_NAME.3dsx" --smdh=game.smdh --romfs=romfs
-              else
-                3dsxtool "$ELF_FILE" "$TARGET_NAME.3dsx" --smdh=game.smdh
+                ROMFS_ARG="-romfs romfs"
+              fi
+
+              makerom -f cia -o "${TARGET_BASE}.cia" -elf "$ELF_FILE" -rsf app.rsf -icon game.smdh $BANNER_ARG $ROMFS_ARG || true
+              
+              if [ -f "${TARGET_BASE}.cia" ]; then
+                cp "${TARGET_BASE}.cia" ../../output_binaries/
               fi
             fi
           fi
 
-          echo "Build Complete! Output files:"
-          ls -lh *.3dsx
-
-      - name: Upload 3DS Executable
+      - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: compiled_3ds_game
-          path: "**/*.3dsx"
+          name: ${{ github.event.inputs.target_format || 'homebrew_binaries' }}
+          path: output_binaries/*

@@ -15,9 +15,9 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Unzip & Extract Project
+      - name: Install Tools & Extract Project
         run: |
-          apt-get update && apt-get install -y unzip
+          apt-get update && apt-get install -y unzip imagemagick
           mkdir -p project
           ZIP_FILE=$(ls *.zip | head -n 1)
           echo "Found zip file: $ZIP_FILE"
@@ -28,18 +28,27 @@ jobs:
           TARGET_DIR=$(find project -name "Makefile" -exec dirname {} \;)
           cd "$TARGET_DIR"
 
-          # Clean and compile ELF binary
+          # 1. Clean previous build artifacts
           make clean
+
+          # 2. Generate a 48x48 icon for the 3DS home menu
+          convert -size 48x48 xc:white icon.png
+
+          # 3. Create the SMDH metadata descriptor
+          smdhtool --create "Meepa 3DS" "Meepa Adventure" "Prism Ink" icon.png meepa_game.smdh
+
+          # 4. Compile the ELF binary
           make meepa_game.elf
 
-          # Package 3DSX directly with romfs
-          3dsxtool meepa_game.elf meepa_game.3dsx --romfs=romfs
+          # 5. Package into the final .3dsx executable
+          3dsxtool meepa_game.elf meepa_game.3dsx --smdh=meepa_game.smdh --romfs=romfs
 
-          echo "Successfully created meepa_game.3dsx!"
-          ls -la meepa_game.3dsx
+          echo "Successfully generated meepa_game.3dsx!"
+          ls -lh meepa_game.3dsx
 
       - name: Upload 3DSX File
         uses: actions/upload-artifact@v4
         with:
           name: meepa_game_3dsx
           path: "**/*.3dsx"
+          

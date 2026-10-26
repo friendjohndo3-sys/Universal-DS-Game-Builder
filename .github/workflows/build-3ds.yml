@@ -6,12 +6,12 @@ on:
       target_format:
         description: 'Choose build output format'
         required: true
-        default: 'all'
+        default: 'cia'
         type: choice
         options:
-          - 'all'
-          - '3dsx'
           - 'cia'
+          - '3dsx'
+          - 'all'
           - 'nds'
       app_title:
         description: 'Application Title'
@@ -51,7 +51,7 @@ jobs:
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITARM: /opt/devkitpro/devkitARM
-      PATH: /opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PATH: /opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
       CC: arm-none-eabi-gcc
       CXX: arm-none-eabi-g++
       LD: arm-none-eabi-gcc
@@ -60,10 +60,28 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Tools & Workspace
+      - name: Setup Tools & Install CIA Tools
         run: |
-          apt-get update && apt-get install -y unzip imagemagick zip curl || true
+          apt-get update && apt-get install -y unzip imagemagick zip curl wget || true
           mkdir -p "$GITHUB_WORKSPACE/workspace" "$GITHUB_WORKSPACE/output_binaries"
+
+          echo "=== Installing makerom and bannertool for CIA generation ==="
+          wget -q https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.3/makerom-v0.18.3-ubuntu_x86_64.zip -O /tmp/makerom.zip || true
+          if [ -f /tmp/makerom.zip ]; then
+            unzip -o /tmp/makerom.zip -d /tmp/makerom_bin
+            cp /tmp/makerom_bin/makerom /usr/local/bin/makerom || cp /tmp/makerom_bin/ubuntu_x86_64/makerom /usr/local/bin/makerom || true
+            chmod +x /usr/local/bin/makerom || true
+          fi
+
+          wget -q https://github.com/Steveice10/bannertool/releases/download/1.2.0/bannertool.zip -O /tmp/bannertool.zip || true
+          if [ -f /tmp/bannertool.zip ]; then
+            unzip -o /tmp/bannertool.zip -d /tmp/bannertool_bin
+            cp /tmp/bannertool_bin/linux-x86_64/bannertool /usr/local/bin/bannertool || cp /tmp/bannertool_bin/bannertool /usr/local/bin/bannertool || true
+            chmod +x /usr/local/bin/bannertool || true
+          fi
+
+          which makerom && echo "makerom installed successfully!" || echo "Warning: makerom not found"
+          which bannertool && echo "bannertool installed successfully!" || echo "Warning: bannertool not found"
 
           ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
@@ -88,7 +106,7 @@ jobs:
           cd "$MAKE_DIR"
           echo "Building in: $(pwd)"
 
-          TARGET_FORMAT="${{ github.event.inputs.target_format || 'all' }}"
+          TARGET_FORMAT="${{ github.event.inputs.target_format || 'cia' }}"
           TITLE="${{ github.event.inputs.app_title || 'Homebrew Game' }}"
           AUTHOR="${{ github.event.inputs.app_author || 'Prism Ink' }}"
           DESC="${{ github.event.inputs.app_description || 'Custom Nintendo Homebrew' }}"
@@ -101,6 +119,9 @@ jobs:
             convert -size 48x48 xc:#34495E icon.png || touch icon.png
           fi
 
+          # Generate SMDH descriptor
+          smdhtool --create "$TITLE" "$DESC" "$AUTHOR" icon.png game.smdh || true
+
           # Compile the codebase
           make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
 
@@ -110,30 +131,10 @@ jobs:
             TARGET_BASE="homebrew_app"
           fi
 
-          # 1. 3DSX Build (.3dsx Homebrew Launcher)
-          if [ "$TARGET_FORMAT" = "3dsx" ] || [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
-            echo "=== Checking / Packaging 3DSX ==="
-            smdhtool --create "$TITLE" "$DESC" "$AUTHOR" icon.png game.smdh || true
-
-            if ! ls *.3dsx 1> /dev/null 2>&1; then
-              if [ -n "$ELF_FILE" ]; then
-                if [ -d "romfs" ]; then
-                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs || true
-                else
-                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh || true
-                fi
-              fi
-            fi
-
-            if ls *.3dsx 1> /dev/null 2>&1; then
-              cp *.3dsx "$OUT_DIR/"
-            fi
-          fi
-
-          # 2. CIA Build (CTR Importable Archive)
+          # 1. Process CIA Target
           if [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
-            echo "=== Checking / Packaging CIA ==="
-            if [ -n "$ELF_FILE" ] && which makerom >/dev/null 2>&1; then
+            echo "=== Building CIA Package ==="
+            if which makerom >/dev/null 2>&1 && [ -n "$ELF_FILE" ]; then
               printf "BasicInfo:\n  Title                   : \"%s\"\n  CompanyCode             : \"00\"\n  ProductCode             : \"%s\"\n  ContentType             : Application\n  Logo                    : Nintendo\n\nTitleInfo:\n  UniqueId                : %s\n  Category                : Application\n\nCardInfo:\n  MediaType               : Card1\n\nPlainRegion:\n\nOption:\n  UseOnSD                 : true\n  EnableCompress          : true\n  FreeProductCode         : true\n  EnableL2Cache           : true\n\nAccessControlInfo:\n  IdealProcessor          : 0\n  AffinityMask            : 1\n  Priority                : 16\n  CoreVersion             : 2\n  DescVersion             : 2\n  ReleaseKernelMajor      : \"02\"\n  ReleaseKernelMinor      : \"33\"\n  MemoryType              : Application\n  HandleTableSize         : 512\n  FileSystemAccess:\n    - DirectSdmc\n\nSystemControlInfo:\n  SaveDataSize            : 512KB\n  RemasterVersion         : 0\n  StackSize               : 0x40000\n" "$TITLE" "$PROD_CODE" "$UNIQUE_ID" > app.rsf
 
               BANNER_ARG=""
@@ -149,23 +150,44 @@ jobs:
                 ROMFS_ARG="-romfs romfs"
               fi
 
-              makerom -f cia -o "${TARGET_BASE}.cia" -elf "$ELF_FILE" -rsf app.rsf -icon game.smdh $BANNER_ARG $ROMFS_ARG || true
+              makerom -f cia -o "${TARGET_BASE}.cia" -elf "$ELF_FILE" -rsf app.rsf -icon game.smdh $BANNER_ARG $ROMFS_ARG
               
               if [ -f "${TARGET_BASE}.cia" ]; then
                 cp "${TARGET_BASE}.cia" "$OUT_DIR/"
+                echo "Successfully built ${TARGET_BASE}.cia!"
               fi
+            else
+              echo "Error: makerom is missing or ELF not found; could not produce CIA."
+              exit 1
             fi
           fi
 
-          # 3. NDS Build (Only if this is a genuine Nintendo DS project or generated .nds)
+          # 2. Process 3DSX Target
+          if [ "$TARGET_FORMAT" = "3dsx" ] || [ "$TARGET_FORMAT" = "all" ]; then
+            echo "=== Packaging 3DSX Target ==="
+            if ! ls *.3dsx 1> /dev/null 2>&1; then
+              if [ -n "$ELF_FILE" ]; then
+                if [ -d "romfs" ]; then
+                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs || true
+                else
+                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh || true
+                fi
+              fi
+            fi
+
+            if ls *.3dsx 1> /dev/null 2>&1; then
+              cp *.3dsx "$OUT_DIR/"
+            fi
+          fi
+
+          # 3. Process NDS Target
           if [ "$TARGET_FORMAT" = "nds" ] || [ "$TARGET_FORMAT" = "all" ]; then
-            echo "=== Checking / Packaging NDS ==="
             if ls *.nds 1> /dev/null 2>&1; then
               cp *.nds "$OUT_DIR/"
             fi
           fi
 
-          echo "=== Final Compiled Artifacts ==="
+          echo "=== Final Output Binaries ==="
           ls -lh "$OUT_DIR/"
 
       - name: Upload Output Artifacts

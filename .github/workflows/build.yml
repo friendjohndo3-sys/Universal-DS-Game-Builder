@@ -19,22 +19,30 @@ jobs:
         run: |
           apt-get update && apt-get install -y unzip
           mkdir -p project
-          # Find any .zip file in the root and extract it
           ZIP_FILE=$(ls *.zip | head -n 1)
           echo "Found zip file: $ZIP_FILE"
           unzip -o "$ZIP_FILE" -d project
-          ls -la project
 
       - name: Compile 3DS Executable
         run: |
-          # If the zip extracted into a subfolder, enter it
-          if [ -d "project/meepa_3ds_game_fixed" ]; then
-            cd project/meepa_3ds_game_fixed
-          else
-            cd project
-          fi
+          # Navigate into the project folder where Makefile lives
+          TARGET_DIR=$(find project -name "Makefile" -exec dirname {} \;)
+          cd "$TARGET_DIR"
+
+          # 1. Clean previous builds
           make clean
-          make
+
+          # 2. Compile ELF binary
+          make meepa_game.elf
+
+          # 3. Generate a valid SMDH icon/metadata descriptor
+          smdhtool --create "Meepa 3DS" "Low-poly chunky 3D adventure" "Prism Ink" meepa_game.smdh
+
+          # 4. Package into 3DSX with romfs and smdh metadata
+          3dsxtool meepa_game.elf meepa_game.3dsx --smdh=meepa_game.smdh --romfs=romfs
+
+          echo "Successfully created meepa_game.3dsx!"
+          ls -la meepa_game.3dsx
 
       - name: Upload 3DSX File
         uses: actions/upload-artifact@v4

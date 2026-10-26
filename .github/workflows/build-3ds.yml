@@ -1,5 +1,4 @@
 name: Universal 3DS Game Builder
-
 on:
   workflow_dispatch:
     inputs:
@@ -39,15 +38,15 @@ on:
         default: '0xF4100'
         type: string
   push:
-    branches: [ "main", "master" ]
-
+    branches:
+      - main
+      - master
 jobs:
   build:
     name: Build Homebrew Package
     runs-on: ubuntu-latest
     container:
       image: devkitpro/devkitarm:latest
-
     env:
       DEVKITPRO: /opt/devkitpro
       DEVKITARM: /opt/devkitpro/devkitARM
@@ -55,7 +54,6 @@ jobs:
       CC: arm-none-eabi-gcc
       CXX: arm-none-eabi-g++
       LD: arm-none-eabi-gcc
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -65,35 +63,24 @@ jobs:
           apt-get update && apt-get install -y unzip imagemagick zip curl wget python3 || true
           mkdir -p "$GITHUB_WORKSPACE/workspace" "$GITHUB_WORKSPACE/output_binaries"
 
-          echo "=== Installing makerom for CIA generation ==="
           curl -sSL "https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.3/makerom-v0.18.3-ubuntu_x86_64.zip" -o /tmp/makerom.zip || true
           if [ -f /tmp/makerom.zip ]; then
             unzip -o /tmp/makerom.zip -d /tmp/makerom_bin 2>/dev/null || true
-            if [ -f /tmp/makerom_bin/makerom ]; then
-              cp /tmp/makerom_bin/makerom /usr/local/bin/makerom
-              chmod +x /usr/local/bin/makerom
-            elif [ -f /tmp/makerom_bin/ubuntu_x86_64/makerom ]; then
-              cp /tmp/makerom_bin/ubuntu_x86_64/makerom /usr/local/bin/makerom
-              chmod +x /usr/local/bin/makerom
-            fi
+            find /tmp/makerom_bin -type f -name "makerom" -exec cp {} /usr/local/bin/makerom \; 2>/dev/null || true
+            chmod +x /usr/local/bin/makerom 2>/dev/null || true
           fi
 
-          echo "=== Installing bannertool (optional) ==="
           curl -sSL "https://github.com/Steveice10/bannertool/releases/download/1.2.0/bannertool.zip" -o /tmp/bannertool.zip || true
           if unzip -t /tmp/bannertool.zip >/dev/null 2>&1; then
             unzip -o /tmp/bannertool.zip -d /tmp/bannertool_bin 2>/dev/null || true
-            find /tmp/bannertool_bin -name "bannertool" -type f -exec cp {} /usr/local/bin/bannertool \; 2>/dev/null || true
+            find /tmp/bannertool_bin -type f -name "bannertool" -exec cp {} /usr/local/bin/bannertool \; 2>/dev/null || true
             chmod +x /usr/local/bin/bannertool 2>/dev/null || true
           fi
 
-          which makerom && echo "makerom is ready!" || echo "Warning: makerom not found"
-
           ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
           if [ -n "$ZIP_FILE" ]; then
-            echo "Extracting archive: $ZIP_FILE"
             unzip -o "$ZIP_FILE" -d "$GITHUB_WORKSPACE/workspace"
           else
-            echo "No zip detected; copying repo files..."
             cp -r ./* "$GITHUB_WORKSPACE/workspace/" 2>/dev/null || true
           fi
 
@@ -101,15 +88,13 @@ jobs:
         run: |
           set -e
           OUT_DIR="$GITHUB_WORKSPACE/output_binaries"
-          mkdir -p "$OUT_DIR"
 
           MAKE_DIR=$(find "$GITHUB_WORKSPACE/workspace" -name "Makefile" -exec dirname {} \; | head -n 1)
           if [ -z "$MAKE_DIR" ]; then
-            echo "Error: Could not locate a Makefile in the uploaded workspace!"
+            echo "Error: No Makefile found!"
             exit 1
           fi
           cd "$MAKE_DIR"
-          echo "Building in: $(pwd)"
 
           TARGET_FORMAT="${{ github.event.inputs.target_format || 'cia' }}"
           TITLE="${{ github.event.inputs.app_title || 'Monster Truck Mayhem!' }}"
@@ -124,35 +109,79 @@ jobs:
             convert -size 48x48 xc:#34495E icon.png || touch icon.png
           fi
 
-          # 1. Generate SMDH metadata descriptor
           smdhtool --create "$TITLE" "$DESC" "$AUTHOR" icon.png game.smdh || true
-
-          # 2. Compile ELF and 3DSX with devkitARM
           make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
 
           ELF_FILE=$(ls *.elf 2>/dev/null | head -n 1)
           TARGET_BASE="${ELF_FILE%.elf}"
           if [ -z "$TARGET_BASE" ]; then
-            TARGET_BASE="monster_truck_mayhem"
+            TARGET_BASE="homebrew_app"
           fi
 
-          # Ensure 3DSX is packaged with romfs so we have the compiled RomFS binary ready
-          if ! ls *.3dsx 1> /dev/null 2>&1; then
-            if [ -n "$ELF_FILE" ]; then
-              if [ -d "romfs" ]; then
-                3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs || true
-              else
-                3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh || true
-              fi
-            fi
+          if [ -d "romfs" ]; then
+            3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs || true
+          else
+            3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh || true
           fi
 
-          # 3. Process CIA Target
           if [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
-            echo "=== Building CIA Package ==="
             if which makerom >/dev/null 2>&1 && [ -n "$ELF_FILE" ]; then
-              printf 'BasicInfo:\n  Title                   : "%s"\n  CompanyCode             : "00"\n  ProductCode             : "%s"\n  ContentType             : Application\n  Logo                    : Nintendo\n\nTitleInfo:\n  UniqueId                : %s\n  Category                : Application\n\nCardInfo:\n  MediaType               : Card1\n\nOption:\n  UseOnSD                 : true\n  FreeProductCode         : true\n\nAccessControlInfo:\n  IdealProcessor          : 0\n  AffinityMask            : 1\n  Priority                : 16\n  CoreVersion             : 2\n  DescVersion             : 2\n  ReleaseKernelMajor      : "02"\n  ReleaseKernelMinor      : "33"\n  MemoryType              : Application\n  HandleTableSize         : 512\n  FileSystemAccess:\n    - DirectSdmc\n  SystemCallAccess:\n    Arbitrary: true\n  ServiceAccessControl:\n    - $ALL\n\nSystemControlInfo:\n  SaveDataSize            : 512KB\n  RemasterVersion         : 0\n  StackSize               : 0x40000\n' "$TITLE" "$PROD_CODE" "$UNIQUE_ID" > app.rsf
+              
+              echo "BasicInfo:" > app.rsf
+              echo "  Title                   : \"$TITLE\"" >> app.rsf
+              echo "  CompanyCode             : \"00\"" >> app.rsf
+              echo "  ProductCode             : \"$PROD_CODE\"" >> app.rsf
+              echo "  ContentType             : Application" >> app.rsf
+              echo "  Logo                    : Nintendo" >> app.rsf
+              echo "TitleInfo:" >> app.rsf
+              echo "  UniqueId                : $UNIQUE_ID" >> app.rsf
+              echo "  Category                : Application" >> app.rsf
+              echo "CardInfo:" >> app.rsf
+              echo "  MediaType               : Card1" >> app.rsf
+              echo "Option:" >> app.rsf
+              echo "  UseOnSD                 : true" >> app.rsf
+              echo "  FreeProductCode         : true" >> app.rsf
+              echo "AccessControlInfo:" >> app.rsf
+              echo "  IdealProcessor          : 0" >> app.rsf
+              echo "  AffinityMask            : 1" >> app.rsf
+              echo "  Priority                : 16" >> app.rsf
+              echo "  CoreVersion             : 2" >> app.rsf
+              echo "  DescVersion             : 2" >> app.rsf
+              echo "  ReleaseKernelMajor      : \"02\"" >> app.rsf
+              echo "  ReleaseKernelMinor      : \"33\"" >> app.rsf
+              echo "  MemoryType              : Application" >> app.rsf
+              echo "  HandleTableSize         : 512" >> app.rsf
+              echo "  FileSystemAccess:" >> app.rsf
+              echo "    - DirectSdmc" >> app.rsf
+              echo "  SystemCallAccess:" >> app.rsf
+              echo "    Arbitrary: true" >> app.rsf
+              echo "  ServiceAccessControl:" >> app.rsf
+              echo "    - \$ALL" >> app.rsf
+              echo "SystemControlInfo:" >> app.rsf
+              echo "  SaveDataSize            : 512KB" >> app.rsf
+              echo "  RemasterVersion         : 0" >> app.rsf
+              echo "  StackSize               : 0x40000" >> app.rsf
 
+              cat << 'EOF' > extract_romfs.py
+import struct, os, sys
+try:
+    with open(sys.argv[1], 'rb') as f:
+        data = f.read()
+    if data[:4] == b'3DSX' and len(data) >= 0x30:
+        rofs_off, rofs_sz = struct.unpack_from('<II', data, 40)
+        if rofs_off > 0 and rofs_sz > 0:
+            with open('romfs.bin', 'wb') as out:
+                out.write(data[rofs_off:rofs_off + rofs_sz])
+except Exception as e:
+    pass
+EOF
+              python3 extract_romfs.py "${TARGET_BASE}.3dsx"
+              
+              ROMFS_ARG=""
+              if [ -f "romfs.bin" ]; then
+                ROMFS_ARG="-romfs romfs.bin"
+              fi
+              
               BANNER_ARG=""
               if which bannertool >/dev/null 2>&1; then
                 bannertool makebanner -i icon.png -a /dev/null -o banner.bin 2>/dev/null || true
@@ -161,55 +190,25 @@ jobs:
                 fi
               fi
 
-              # Extract the bit-perfect compiled RomFS filesystem binary from the 3dsx
-              ROMFS_ARG=""
-              python3 -c "
-import struct, os
-path = '${TARGET_BASE}.3dsx'
-if os.path.exists(path):
-    with open(path, 'rb') as f:
-        data = f.read()
-    if data[:4] == b'3DSX' and len(data) >= 0x2C:
-        rofs_off, rofs_sz = struct.unpack_from('<II', data, 0x24)
-        if rofs_off > 0 and rofs_sz > 0:
-            with open('romfs.bin', 'wb') as out:
-                out.write(data[rofs_off:rofs_off + rofs_sz])
-            print(f'Extracted compiled RomFS binary ({rofs_sz} bytes)')
-"
-              if [ -f "romfs.bin" ]; then
-                ROMFS_ARG="-romfs romfs.bin"
-              fi
-
-              echo "Executing makerom to produce CIA..."
               makerom -f cia -o "${TARGET_BASE}.cia" -elf "$ELF_FILE" -rsf app.rsf -icon game.smdh $BANNER_ARG $ROMFS_ARG
               
               if [ -f "${TARGET_BASE}.cia" ]; then
                 cp "${TARGET_BASE}.cia" "$OUT_DIR/"
-                echo "Successfully built ${TARGET_BASE}.cia!"
               fi
-            else
-              echo "Error: makerom could not be found or ELF missing; unable to produce CIA."
-              exit 1
             fi
           fi
 
-          # 4. Process 3DSX Target (Only if requested or 'all')
           if [ "$TARGET_FORMAT" = "3dsx" ] || [ "$TARGET_FORMAT" = "all" ]; then
-            echo "=== Packaging 3DSX Target ==="
             if ls *.3dsx 1> /dev/null 2>&1; then
               cp *.3dsx "$OUT_DIR/"
             fi
           fi
 
-          # 5. Process NDS Target (Only if requested or 'all')
           if [ "$TARGET_FORMAT" = "nds" ] || [ "$TARGET_FORMAT" = "all" ]; then
             if ls *.nds 1> /dev/null 2>&1; then
               cp *.nds "$OUT_DIR/"
             fi
           fi
-
-          echo "=== Final Output Binaries ==="
-          ls -lh "$OUT_DIR/"
 
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@v4

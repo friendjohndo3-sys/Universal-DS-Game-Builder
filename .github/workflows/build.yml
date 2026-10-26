@@ -1,4 +1,4 @@
-name: Build 3DS Game from Zip
+name: Universal 3DS Game Builder
 
 on:
   push:
@@ -11,44 +11,79 @@ jobs:
     container:
       image: devkitpro/devkitarm:latest
 
+    env:
+      DEVKITPRO: /opt/devkitpro
+      DEVKITARM: /opt/devkitpro/devkitARM
+      PATH: /opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      CC: arm-none-eabi-gcc
+      CXX: arm-none-eabi-g++
+      LD: arm-none-eabi-gcc
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Tools & Extract Project
+      - name: Extract Project
         run: |
-          apt-get update && apt-get install -y unzip imagemagick
-          mkdir -p project
-          ZIP_FILE=$(ls *.zip | head -n 1)
-          echo "Found zip file: $ZIP_FILE"
-          unzip -o "$ZIP_FILE" -d project
+          which arm-none-eabi-gcc
+          apt-get update && apt-get install -y unzip imagemagick || true
+          mkdir -p workspace
+          
+          # Find any uploaded zip file
+          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Unpacking $ZIP_FILE..."
+            unzip -o "$ZIP_FILE" -d workspace
+          else
+            echo "No zip file found; copying repository root..."
+            cp -r ./* workspace/ 2>/dev/null || true
+          fi
 
-      - name: Compile 3DS Executable
+      - name: Universal 3DS Compile & Package
         run: |
-          TARGET_DIR=$(find project -name "Makefile" -exec dirname {} \;)
-          cd "$TARGET_DIR"
+          # Locate the directory containing the Makefile
+          MAKE_DIR=$(find workspace -name "Makefile" -exec dirname {} \; | head -n 1)
+          if [ -z "$MAKE_DIR" ]; then
+            echo "Error: Could not locate a Makefile in the uploaded project!"
+            exit 1
+          fi
+          cd "$MAKE_DIR"
+          echo "Building in: $(pwd)"
 
-          # 1. Clean previous build artifacts
-          make clean
+          # 1. Clean old objects
+          make clean || true
 
-          # 2. Generate a 48x48 icon for the 3DS home menu
-          convert -size 48x48 xc:white icon.png
+          # 2. Ensure an icon exists for 3DS Home Menu
+          if [ ! -f "icon.png" ]; then
+            echo "Generating default 48x48 icon..."
+            convert -size 48x48 xc:#4A90E2 icon.png || touch icon.png
+          fi
 
-          # 3. Create the SMDH metadata descriptor
-          smdhtool --create "Meepa 3DS" "Meepa Adventure" "Prism Ink" icon.png meepa_game.smdh
+          # 3. Create SMDH metadata descriptor
+          smdhtool --create "Homebrew Game" "Custom 3DS Adventure" "Prism Ink" icon.png game.smdh || true
 
-          # 4. Compile the ELF binary
-          make meepa_game.elf
+          # 4. Compile with 3DS ARM cross-compiler explicitly
+          make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
 
-          # 5. Package into the final .3dsx executable
-          3dsxtool meepa_game.elf meepa_game.3dsx --smdh=meepa_game.smdh --romfs=romfs
+          # 5. If Makefile didn't generate .3dsx directly, package it from the compiled ELF
+          if ! ls *.3dsx 1> /dev/null 2>&1; then
+            ELF_FILE=$(ls *.elf | head -n 1)
+            if [ -n "$ELF_FILE" ]; then
+              TARGET_NAME="${ELF_FILE%.elf}"
+              echo "Packaging $TARGET_NAME.3dsx..."
+              if [ -d "romfs" ]; then
+                3dsxtool "$ELF_FILE" "$TARGET_NAME.3dsx" --smdh=game.smdh --romfs=romfs
+              else
+                3dsxtool "$ELF_FILE" "$TARGET_NAME.3dsx" --smdh=game.smdh
+              fi
+            fi
+          fi
 
-          echo "Successfully generated meepa_game.3dsx!"
-          ls -lh meepa_game.3dsx
+          echo "Build Complete! Output files:"
+          ls -lh *.3dsx
 
-      - name: Upload 3DSX File
+      - name: Upload 3DS Executable
         uses: actions/upload-artifact@v4
         with:
-          name: meepa_game_3dsx
+          name: compiled_3ds_game
           path: "**/*.3dsx"
-          

@@ -16,7 +16,7 @@ on:
       app_title:
         description: 'Application Title'
         required: false
-        default: 'Homebrew Game'
+        default: 'Monster Truck Mayhem!'
         type: string
       app_author:
         description: 'Author / Studio'
@@ -26,7 +26,7 @@ on:
       app_description:
         description: 'Short Description'
         required: false
-        default: 'Custom Nintendo Homebrew'
+        default: '3D Stadium Racing & Freestyle'
         type: string
       product_code:
         description: 'Unique Product Code for CIA (format: CTR-P-XXXX)'
@@ -62,7 +62,7 @@ jobs:
 
       - name: Setup Tools & Install CIA Tools
         run: |
-          apt-get update && apt-get install -y unzip imagemagick zip curl wget || true
+          apt-get update && apt-get install -y unzip imagemagick zip curl wget python3 || true
           mkdir -p "$GITHUB_WORKSPACE/workspace" "$GITHUB_WORKSPACE/output_binaries"
 
           echo "=== Installing makerom for CIA generation ==="
@@ -112,9 +112,9 @@ jobs:
           echo "Building in: $(pwd)"
 
           TARGET_FORMAT="${{ github.event.inputs.target_format || 'cia' }}"
-          TITLE="${{ github.event.inputs.app_title || 'Homebrew Game' }}"
+          TITLE="${{ github.event.inputs.app_title || 'Monster Truck Mayhem!' }}"
           AUTHOR="${{ github.event.inputs.app_author || 'Prism Ink' }}"
-          DESC="${{ github.event.inputs.app_description || 'Custom Nintendo Homebrew' }}"
+          DESC="${{ github.event.inputs.app_description || '3D Stadium Racing & Freestyle' }}"
           PROD_CODE="${{ github.event.inputs.product_code || 'CTR-P-MEEP' }}"
           UNIQUE_ID="${{ github.event.inputs.unique_id || '0xF4100' }}"
 
@@ -124,19 +124,30 @@ jobs:
             convert -size 48x48 xc:#34495E icon.png || touch icon.png
           fi
 
-          # Generate SMDH descriptor for 3DS
+          # 1. Generate SMDH metadata descriptor
           smdhtool --create "$TITLE" "$DESC" "$AUTHOR" icon.png game.smdh || true
 
-          # Compile the codebase using ARM11 devkitARM
+          # 2. Compile ELF and 3DSX with devkitARM
           make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
 
           ELF_FILE=$(ls *.elf 2>/dev/null | head -n 1)
           TARGET_BASE="${ELF_FILE%.elf}"
           if [ -z "$TARGET_BASE" ]; then
-            TARGET_BASE="homebrew_app"
+            TARGET_BASE="monster_truck_mayhem"
           fi
 
-          # 1. Process CIA Target
+          # Ensure 3DSX is packaged with romfs so we have the compiled RomFS binary ready
+          if ! ls *.3dsx 1> /dev/null 2>&1; then
+            if [ -n "$ELF_FILE" ]; then
+              if [ -d "romfs" ]; then
+                3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs || true
+              else
+                3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh || true
+              fi
+            fi
+          fi
+
+          # 3. Process CIA Target
           if [ "$TARGET_FORMAT" = "cia" ] || [ "$TARGET_FORMAT" = "all" ]; then
             echo "=== Building CIA Package ==="
             if which makerom >/dev/null 2>&1 && [ -n "$ELF_FILE" ]; then
@@ -150,12 +161,26 @@ jobs:
                 fi
               fi
 
+              # Extract the bit-perfect compiled RomFS filesystem binary from the 3dsx
               ROMFS_ARG=""
-              if [ -d "romfs" ]; then
-                ROMFS_ARG="-romfs romfs"
+              python3 -c "
+import struct, os
+path = '${TARGET_BASE}.3dsx'
+if os.path.exists(path):
+    with open(path, 'rb') as f:
+        data = f.read()
+    if data[:4] == b'3DSX' and len(data) >= 0x2C:
+        rofs_off, rofs_sz = struct.unpack_from('<II', data, 0x24)
+        if rofs_off > 0 and rofs_sz > 0:
+            with open('romfs.bin', 'wb') as out:
+                out.write(data[rofs_off:rofs_off + rofs_sz])
+            print(f'Extracted compiled RomFS binary ({rofs_sz} bytes)')
+"
+              if [ -f "romfs.bin" ]; then
+                ROMFS_ARG="-romfs romfs.bin"
               fi
 
-              echo "Executing makerom..."
+              echo "Executing makerom to produce CIA..."
               makerom -f cia -o "${TARGET_BASE}.cia" -elf "$ELF_FILE" -rsf app.rsf -icon game.smdh $BANNER_ARG $ROMFS_ARG
               
               if [ -f "${TARGET_BASE}.cia" ]; then
@@ -168,25 +193,15 @@ jobs:
             fi
           fi
 
-          # 2. Process 3DSX Target (Only if requested or 'all')
+          # 4. Process 3DSX Target (Only if requested or 'all')
           if [ "$TARGET_FORMAT" = "3dsx" ] || [ "$TARGET_FORMAT" = "all" ]; then
             echo "=== Packaging 3DSX Target ==="
-            if ! ls *.3dsx 1> /dev/null 2>&1; then
-              if [ -n "$ELF_FILE" ]; then
-                if [ -d "romfs" ]; then
-                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh --romfs=romfs || true
-                else
-                  3dsxtool "$ELF_FILE" "${TARGET_BASE}.3dsx" --smdh=game.smdh || true
-                fi
-              fi
-            fi
-
             if ls *.3dsx 1> /dev/null 2>&1; then
               cp *.3dsx "$OUT_DIR/"
             fi
           fi
 
-          # 3. Process NDS Target (Only if requested or 'all')
+          # 5. Process NDS Target (Only if requested or 'all')
           if [ "$TARGET_FORMAT" = "nds" ] || [ "$TARGET_FORMAT" = "all" ]; then
             if ls *.nds 1> /dev/null 2>&1; then
               cp *.nds "$OUT_DIR/"

@@ -1,0 +1,89 @@
+name: 2DS Optimized Game Builder
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "**.c"
+      - "**.cpp"
+      - "**.h"
+      - "Makefile"
+      - "romfs/**"
+      - "**.zip"
+
+jobs:
+  build-2ds:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:latest
+
+    env:
+      DEVKITPRO: /opt/devkitpro
+      DEVKITARM: /opt/devkitpro/devkitARM
+      PATH: /opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      CC: arm-none-eabi-gcc
+      CXX: arm-none-eabi-g++
+      LD: arm-none-eabi-gcc
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Unpack Source Archive
+        run: |
+          apt-get update && apt-get install -y unzip imagemagick || true
+          mkdir -p workspace
+          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Unpacking $ZIP_FILE..."
+            unzip -o "$ZIP_FILE" -d workspace
+          else
+            echo "No zip detected, copying repo files..."
+            cp -r ./* workspace/ 2>/dev/null || true
+          fi
+
+      - name: Build 2DS-Compatible Binary
+        run: |
+          MAKE_DIR=$(find workspace -name "Makefile" -exec dirname {} \; | head -n 1)
+          if [ -z "$MAKE_DIR" ]; then
+            echo "Error: No Makefile found!"
+            exit 1
+          fi
+          cd "$MAKE_DIR"
+          echo "Compiling in: $(pwd)"
+
+          # Clean previous build artifacts
+          make clean || true
+
+          # Ensure 48x48 icon exists
+          if [ ! -f "icon.png" ]; then
+            convert -size 48x48 xc:#2C3E50 icon.png || touch icon.png
+          fi
+
+          # Generate SMDH descriptor targeting 2DS/3DS home menu
+          smdhtool --create "2DS Game" "Optimized for 2DS/3DS" "Prism Ink" icon.png game.smdh || true
+
+          # Build using ARM11 cross-compiler
+          make CC=arm-none-eabi-gcc CXX=arm-none-eabi-g++ LD=arm-none-eabi-gcc
+
+          # Ensure .3dsx packaging is complete
+          if ! ls *.3dsx 1> /dev/null 2>&1; then
+            ELF_FILE=$(ls *.elf | head -n 1)
+            if [ -n "$ELF_FILE" ]; then
+              TARGET_NAME="${ELF_FILE%.elf}"
+              if [ -d "romfs" ]; then
+                3dsxtool "$ELF_FILE" "${TARGET_NAME}_2ds.3dsx" --smdh=game.smdh --romfs=romfs
+              else
+                3dsxtool "$ELF_FILE" "${TARGET_NAME}_2ds.3dsx" --smdh=game.smdh
+              fi
+            fi
+          fi
+
+          echo "Generated 2DS-ready executables:"
+          ls -lh *.3dsx
+
+      - name: Upload 2DS Executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: 2ds_game_executable
+          path: "**/*.3dsx"
